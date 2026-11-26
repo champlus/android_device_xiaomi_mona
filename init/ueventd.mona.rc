@@ -1,0 +1,20 @@
+#
+# SPDX-FileCopyrightText: The LineageOS Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Installed to /odm/etc/ueventd.rc (extends /vendor/etc/ueventd.rc from sm8350-common)
+
+# Xiaomi display feature device node
+subsystem mi_display
+    devname uevent_devname
+    dirname /dev/mi_display
+
+/dev/mi_display/*         0666   root       graphics
+
+# PM8350C front dual soft-light flash LEDs (torch_1, torch_2, switch_1)
+/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-02/c440000.qcom,spmi:qcom,pm8350c@2:qcom,flash_led@ee00/leds/led:torch_1  brightness 0660 cameraserver camera
+/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-02/c440000.qcom,spmi:qcom,pm8350c@2:qcom,flash_led@ee00/leds/led:torch_2  brightness 0660 cameraserver camera
+/sys/devices/platform/soc/c440000.qcom,spmi/spmi-0/spmi0-02/c440000.qcom,spmi:qcom,pm8350c@2:qcom,flash_led@ee00/leds/led:switch_1 brightness 0660 cameraserver camera
+
+# WCN6750 integrated WLAN (icnss2) RPS queue permissions
+/sys/devices/platform/soc/*.qcom,icnss/net/wlan*/queues/rx-* rps_cpus 0660 system system

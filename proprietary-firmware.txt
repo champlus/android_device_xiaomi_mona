@@ -1,0 +1,20 @@
+# All unpinned firmware images below are extracted from mona OS1.0.2.0.TKVCNXM (V816.0.2.0.TKVCNXM)
+# Verified against payload.bin DeltaArchiveManifest in docs/stock-hardware-report.md
+
+abl.img;AB
+aop.img;AB
+bluetooth.img;AB
+cpucp.img;AB
+devcfg.img;AB
+dsp.img;AB
+featenabler.img;AB
+hyp.img;AB
+imagefv.img;AB
+keymaster.img;AB
+modem.img;AB
+qupfw.img;AB
+shrm.img;AB
+tz.img;AB
+uefisecapp.img;AB
+xbl_config.img;AB
+xbl.img;AB

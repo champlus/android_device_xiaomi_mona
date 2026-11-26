@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     SPDX-FileCopyrightText: The LineageOS Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- Padding on the start/end of the status bar in landscape for curved corners -->
+    <dimen name="status_bar_padding_start">8dp</dimen>
+    <dimen name="status_bar_padding_end">8dp</dimen>
+</resources>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     SPDX-FileCopyrightText: The LineageOS Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- Curved OLED edge content padding -->
+    <dimen name="rounded_corner_content_padding">50px</dimen>
+
+    <!-- Bottom margin size when UDFPS is active -->
+    <dimen name="keyguard_indication_margin_bottom">16dp</dimen>
+
+    <!-- Center of the physical power button on screen -->
+    <dimen name="physical_power_button_center_screen_location_y">1100px</dimen>
+
+    <!-- Center of the Goodix optical UDFPS sensor (540, 2147, radius 103px) -->
+    <dimen name="physical_fingerprint_sensor_center_screen_location_y">2147px</dimen>
+
+    <!-- Microns per pixel (6.55" 1080x2400, 68.3x151.7mm -> 63.27 um/px) -->
+    <item name="pixel_pitch" format="float" type="dimen">63.27</item>
+</resources>

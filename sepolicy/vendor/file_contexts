@@ -1,0 +1,3 @@
+# Optical UDFPS touch sysfs nodes (added to xiaomi_touch.c for synaptics_s3908p)
+/sys/devices/virtual/touch/touch_dev/fod_longpress_gesture_enabled u:object_r:vendor_sysfs_udfps:s0
+/sys/devices/virtual/touch/touch_dev/fod_finger_down u:object_r:vendor_sysfs_udfps:s0

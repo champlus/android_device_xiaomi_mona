@@ -1,0 +1,71 @@
+#
+# SPDX-FileCopyrightText: The LineageOS Project
+# SPDX-License-Identifier: Apache-2.0
+#
+
+on fs
+    # Dual Awinic AW882xx stereo Smart PA calibration node
+    chown system system /sys/class/smartpa/re25_calib
+    chmod 0666 /sys/class/smartpa/re25_calib
+
+    # Awinic AW8622x / AW8624 Z-axis LRA haptics calibration nodes
+    chown system system /sys/bus/i2c/drivers/awinic_haptic/3-005a/f0_save
+    chown system system /sys/bus/i2c/drivers/awinic_haptic/3-005a/osc_save
+    chown system system /sys/bus/i2c/drivers/awinic_haptic/3-005a/custom_wave
+    chmod 0666 /sys/bus/i2c/drivers/awinic_haptic/3-005a/custom_wave
+    chown system system /sys/bus/i2c/drivers/awinic_haptic/3-005a/f0_value
+    chmod 0666 /sys/bus/i2c/drivers/awinic_haptic/3-005a/f0_value
+    chown system system /sys/bus/i2c/drivers/awinic_haptic/3-005a/nv_flag
+    chmod 0666 /sys/bus/i2c/drivers/awinic_haptic/3-005a/nv_flag
+
+on post-fs-data
+    # Front dual soft-light flash (led:torch_{1,2}, led:flash_{1,2}, led:switch_1)
+    # and rear flash (led:torch_0, led:flash_0, led:switch_0) on PM8350C @ 0xee00
+    chown cameraserver system /sys/class/leds/led:torch_0/brightness
+    chown cameraserver system /sys/class/leds/led:torch_1/brightness
+    chown cameraserver system /sys/class/leds/led:torch_2/brightness
+    chown cameraserver system /sys/class/leds/led:flash_0/brightness
+    chown cameraserver system /sys/class/leds/led:flash_1/brightness
+    chown cameraserver system /sys/class/leds/led:flash_2/brightness
+    chown cameraserver system /sys/class/leds/led:switch_0/brightness
+    chown cameraserver system /sys/class/leds/led:switch_1/brightness
+    chown cameraserver system /sys/class/leds/led:switch_0/trigger
+    chown cameraserver system /sys/class/leds/led:switch_1/trigger
+    chown system system /sys/class/leds/flashlight/brightness
+    chmod 0664 /sys/class/leds/led:torch_0/brightness
+    chmod 0664 /sys/class/leds/led:torch_1/brightness
+    chmod 0664 /sys/class/leds/led:torch_2/brightness
+    chmod 0664 /sys/class/leds/led:flash_0/brightness
+    chmod 0664 /sys/class/leds/led:flash_1/brightness
+    chmod 0664 /sys/class/leds/led:flash_2/brightness
+    chmod 0664 /sys/class/leds/led:switch_0/brightness
+    chmod 0664 /sys/class/leds/led:switch_1/brightness
+    chmod 0664 /sys/class/leds/led:switch_0/trigger
+    chmod 0664 /sys/class/leds/led:switch_1/trigger
+    chmod 0664 /sys/class/leds/flashlight/brightness
+
+on boot
+    # Screen-off / AOD optical UDFPS gesture toggle (xiaomi_touch -> synaptics_s3908p)
+    chown system system /sys/devices/virtual/touch/touch_dev/fod_press_status
+    chmod 0664 /sys/devices/virtual/touch/touch_dev/fod_press_status
+    restorecon /sys/devices/virtual/touch/touch_dev/fod_press_status
+    chown system system /sys/devices/virtual/touch/touch_dev/fod_longpress_gesture_enabled
+    chmod 0664 /sys/devices/virtual/touch/touch_dev/fod_longpress_gesture_enabled
+    restorecon /sys/devices/virtual/touch/touch_dev/fod_longpress_gesture_enabled
+    chown system system /sys/devices/virtual/touch/touch_dev/fod_finger_down
+    chmod 0664 /sys/devices/virtual/touch/touch_dev/fod_finger_down
+    restorecon /sys/devices/virtual/touch/touch_dev/fod_finger_down
+
+    # Xiaomi display feature nodes (used by libgf_hal.so & panel calibration)
+    chown system system /sys/class/mi_display/disp-DSI-0/disp_param
+    chmod 0664 /sys/class/mi_display/disp-DSI-0/disp_param
+    chown system system /sys/class/mi_display/disp-DSI-0/panel_info
+    chmod 0444 /sys/class/mi_display/disp-DSI-0/panel_info
+    chown system system /sys/class/mi_display/disp-DSI-0/wp_info
+    chmod 0444 /sys/class/mi_display/disp-DSI-0/wp_info
+    chown system system /sys/class/mi_display/disp-DSI-0/dynamic_fps
+    chmod 0444 /sys/class/mi_display/disp-DSI-0/dynamic_fps
+    chown system system /sys/class/mi_display/disp-DSI-0/doze_brightness
+    chmod 0664 /sys/class/mi_display/disp-DSI-0/doze_brightness
+    chown system system /sys/class/mi_display/disp-DSI-0/brightness_clone
+    chmod 0664 /sys/class/mi_display/disp-DSI-0/brightness_clone

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Drop-in local manifest for Xiaomi Civi 1 (mona / SM7325 / K9B)
+  Target: crDroid 13.1 (17.0 / Android 17 / LineageOS 24.0)
+
+  Place this file at:
+    <rom-root>/.repo/local_manifests/mona.xml
+-->
+<manifest>
+  <!-- Device tree (Xiaomi Civi 1 - mona) -->
+  <project path="device/xiaomi/mona"
+           name="champlus/android_device_xiaomi_mona"
+           remote="github"
+           revision="17.0" />
+
+  <!-- Proprietary vendor blobs (extracted from HyperOS OS1.0.2.0.TKVCNXM) -->
+  <project path="vendor/xiaomi/mona"
+           name="champlus/proprietary_vendor_xiaomi_mona"
+           remote="github"
+           revision="17.0"
+           clone-depth="1" />
+
+  <!-- Common SM8350/SM7325 device tree -->
+  <project path="device/xiaomi/sm8350-common"
+           name="LineageOS/android_device_xiaomi_sm8350-common"
+           remote="github"
+           revision="lineage-24.0"
+           clone-depth="1" />
+
+  <!-- Patched SM8350/SM7325 Linux 5.4.302 kernel (all 10 mona patches applied) -->
+  <project path="kernel/xiaomi/sm8350"
+           name="champlus/android_kernel_xiaomi_sm8350"
+           remote="github"
+           revision="17.0"
+           clone-depth="1" />
+
+  <!-- KernelSU-Next legacy branch (full history required for KSU_VERSION calculation) -->
+  <project path="kernel/xiaomi/sm8350/KernelSU-Next"
+           name="KernelSU-Next/KernelSU-Next"
+           remote="github"
+           revision="legacy" />
+
+  <!-- Xiaomi hardware HALs (AIDL V4 fingerprint, UDFPS, sensors) -->
+  <project path="hardware/xiaomi"
+           name="LineageOS/android_hardware_xiaomi"
+           remote="github"
+           revision="lineage-24.0"
+           clone-depth="1" />
+
+  <!-- Common SM8350/SM7325 proprietary vendor blobs -->
+  <project path="vendor/xiaomi/sm8350-common"
+           name="TheMuppets/proprietary_vendor_xiaomi_sm8350-common"
+           remote="github"
+           revision="lineage-24.0"
+           clone-depth="1" />
+</manifest>

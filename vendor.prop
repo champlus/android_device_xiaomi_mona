@@ -1,0 +1,27 @@
+# Audio hardware (loads vendor/lib/hw/audio.primary.mona.so with dual AW882xx Smart PAs)
+ro.hardware.audio.primary=mona
+ro.vendor.audio.spk.stereo=true
+vendor.audio.spkcal.copy.inhal=true
+vendor.audio.spkr_prot.tx.sampling_rate=48000
+
+# Bluetooth
+bluetooth.device.default_name=Xiaomi Civi
+
+# Display (CSOT K9B 6.55" 120Hz curved OLED)
+ro.vendor.display.type=oled
+ro.vendor.display.default_fps=60
+
+# Fingerprint (Goodix optical UDFPS on CSOT K9B LHBM panel)
+# Exact geometry verified from OS1.0.2.0.TKVCNXM (X_Y=437,2044 W_H=206,206),
+# k9b LHBM register 0x88 (0x021C=540, 0x0863=2147), and synaptics_tcm_touch.c (CENTER_X/Y_MONA).
+persist.vendor.fingerprint.type=udfps_optical
+persist.vendor.fingerprint.sensor_location=540|2147|103
+
+# USB
+vendor.usb.product_string=Xiaomi Civi
+
+# Wi-Fi (Qualcomm WCN6750)
+ro.hardware.wlan.chip=6750
+ro.hardware.wlan.dbs=0
+ro.hardware.wlan.mimo=1
+ro.hardware.wlan.vendor=qcom

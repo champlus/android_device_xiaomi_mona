@@ -1,0 +1,166 @@
+From 754176e47a3c8be17d43fe6ff0eb674cc78ab14a Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi Port <mona-port@lineageos.local>
+Date: Mon, 23 Nov 2026 14:00:13 +0800
+Subject: [PATCH 3/3] input: touchscreen: synaptics_s3908p & xiaomi_touch: Wire
+ UDFPS and touchfeature
+
+1. Register synaptics_s3908p with xiaomi_touch via
+   xiaomitouch_register_modedata(0, p_xiaomi_touch_interfaces) so
+   /dev/xiaomi-touch ioctls (DT2W, FOD enable, edge filter) work on mona,
+   and fix the upstream missing return on NULL touch_pdata inside
+   xiaomitouch_register_modedata().
+2. Allow FOD_STATUS_INVALID (-1) for Touch_Fod_Enable in
+   syna_tcm_set_cur_value() so /dev/xiaomi-touch ioctl callers passing
+   FOD_STATUS_INVALID are not rejected by the pre-switch val < 0 check.
+3. Call update_fod_press_status(1/0) in touch_fod_down_event() and
+   touch_fod_up_event() so /sys/class/touch/touch_dev/fod_press_status
+   notifies hardware/xiaomi sensors.xiaomi.v2 (org.lineageos.sensor.udfps).
+4. Expose /sys/class/touch/touch_dev/fod_longpress_gesture_enabled in
+   xiaomi_touch.c (with NULL pdata checks) dispatching Touch_Fod_Enable
+   (1 = FOD_STATUS_UNLOCKING to enable, 100 = FOD_STATUS_DELETED to
+   disable) to match hardware/xiaomi/sensors/v2/Sensor.h UdfpsSensor.
+---
+ .../synaptics_s3908p/synaptics_tcm_core.c     |  4 +-
+ .../synaptics_s3908p/synaptics_tcm_touch.c    |  4 +-
+ .../input/touchscreen/xiaomi/xiaomi_touch.c   | 47 ++++++++++++++++++-
+ .../input/touchscreen/xiaomi/xiaomi_touch.h   |  1 +
+ 4 files changed, 52 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
+index 4bd8ae9..63df5a8 100644
+--- a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
++++ b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
+@@ -4670,7 +4670,7 @@ static int syna_tcm_set_cur_value(int mode, int val)
+ 		goto exit;
+ 	}
+ 
+-	if (val < 0) {
++	if (val < 0 && !(mode == Touch_Fod_Enable && val == FOD_STATUS_INVALID)) {
+ 		LOGE(tcm_hcd->pdev->dev.parent, "error value [%d]\n", val);
+ 		retval = -EINVAL;
+ 		goto exit;
+@@ -6273,7 +6273,7 @@ static int syna_tcm_probe(struct platform_device *pdev)
+ 			"read touchmode data from IC failed!\n");
+ 	}
+ 	syna_tcm_init_touchmode_data();
+-	// xiaomitouch_register_modedata(0, p_xiaomi_touch_interfaces);
++	xiaomitouch_register_modedata(0, p_xiaomi_touch_interfaces);
+ #endif
+ 
+ prepare_modules:
+diff --git a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c
+index 95761fb..3e10be9 100644
+--- a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c
++++ b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c
+@@ -194,7 +194,8 @@ static void touch_fod_down_event(void)
+ 	if (!tcm_hcd->fod_display_enabled) {
+ 		input_report_key(touch_hcd->input_dev, BTN_INFO, 1);
+ 		input_sync(touch_hcd->input_dev);
+-		LOGI(tcm_hcd->pdev->dev.parent, "FOD DOWN Dfetected\n");
++		update_fod_press_status(1);
++		LOGI(tcm_hcd->pdev->dev.parent, "FOD DOWN Detected\n");
+ 		tcm_hcd->fod_display_enabled = true;
+ 	}
+ }
+@@ -206,6 +207,7 @@ static void touch_fod_up_event(void)
+ 	LOGI(tcm_hcd->pdev->dev.parent, "FOD UP Detected\n");
+ 	input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
+ 	input_sync(touch_hcd->input_dev);
++	update_fod_press_status(0);
+ 	tcm_hcd->fod_display_enabled = false;
+ }
+ 
+diff --git a/drivers/input/touchscreen/xiaomi/xiaomi_touch.c b/drivers/input/touchscreen/xiaomi/xiaomi_touch.c
+index d27f26a..71e50b3 100644
+--- a/drivers/input/touchscreen/xiaomi/xiaomi_touch.c
++++ b/drivers/input/touchscreen/xiaomi/xiaomi_touch.c
+@@ -225,7 +225,7 @@ int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *da
+ 	struct xiaomi_touch_interface *touch_data = NULL;
+ 
+ 	if (!touch_pdata)
+-		ret = -ENOMEM;
++		return -ENOMEM;
+ 
+ 	touch_data = touch_pdata->touch_data[touchId];
+ 	pr_info("%s\n", __func__);
+@@ -972,6 +972,48 @@ static ssize_t fod_press_status_show(struct device *dev,
+ 	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->fod_press_status_value);
+ }
+ 
++static ssize_t fod_longpress_gesture_enabled_show(struct device *dev,
++						  struct device_attribute *attr, char *buf)
++{
++	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
++
++	if (!pdata)
++		return -ENODEV;
++
++	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->fod_longpress_gesture_enabled);
++}
++
++static ssize_t fod_longpress_gesture_enabled_store(struct device *dev,
++						   struct device_attribute *attr,
++						   const char *buf, size_t count)
++{
++	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
++	struct xiaomi_touch_interface *touch_data;
++	unsigned int val = 0;
++
++	if (!pdata)
++		return -ENODEV;
++
++	if (kstrtouint(buf, 10, &val))
++		return -EINVAL;
++
++	touch_data = pdata->touch_data[0];
++
++	mutex_lock(&xiaomi_touch_dev.mutex);
++	pdata->fod_longpress_gesture_enabled = val ? 1 : 0;
++	if (touch_data && touch_data->setModeValue) {
++		/*
++		 * Synaptics S3908P treats 1 as FOD_STATUS_UNLOCKING (enable)
++		 * and 100 as FOD_STATUS_DELETED (disable); 0 is
++		 * FOD_STATUS_UNLOCKED which keeps FOD enabled.
++		 */
++		touch_data->setModeValue(Touch_Fod_Enable, val ? 1 : 100);
++	}
++	mutex_unlock(&xiaomi_touch_dev.mutex);
++
++	return count;
++}
++
+ static DEVICE_ATTR(touch_thp_cmd, (S_IRUGO | S_IWUSR | S_IWGRP),
+ 			thp_cmd_status_show, thp_cmd_status_store);
+ 
+@@ -1034,6 +1076,9 @@ static DEVICE_ATTR(update_rawdata, (S_IRUGO | S_IWUSR | S_IWGRP), update_rawdata
+ 
+ static DEVICE_ATTR(fod_press_status, (0664), fod_press_status_show, NULL);
+ 
++static DEVICE_ATTR(fod_longpress_gesture_enabled, (S_IRUGO | S_IWUSR | S_IWGRP),
++		   fod_longpress_gesture_enabled_show, fod_longpress_gesture_enabled_store);
++
+ static struct attribute *touch_attr_group[] = {
+ 	&dev_attr_enable_touch_raw.attr,
+ 	&dev_attr_enable_touch_delta.attr,
+@@ -1059,6 +1104,7 @@ static struct attribute *touch_attr_group[] = {
+ 	&dev_attr_update_rawdata.attr,
+ 	&dev_attr_suspend_state.attr,
+ 	&dev_attr_fod_press_status.attr,
++	&dev_attr_fod_longpress_gesture_enabled.attr,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/input/touchscreen/xiaomi/xiaomi_touch.h b/drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+index 3808359..19ed67b 100644
+--- a/drivers/input/touchscreen/xiaomi/xiaomi_touch.h
++++ b/drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+@@ -170,6 +170,7 @@ struct xiaomi_touch_pdata{
+ 	bool prox_changed;
+ 	const char *name;
+ 	int fod_press_status_value;
++	int fod_longpress_gesture_enabled;
+ 	struct proc_dir_entry  *last_touch_events_proc;
+ 	struct last_touch_event *last_touch_events;
+ };
+-- 
+2.43.0

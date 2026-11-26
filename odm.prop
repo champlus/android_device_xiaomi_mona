@@ -1,0 +1,4 @@
+# Single-SKU China-only device properties (verified from OS1.0.2.0.TKVCNXM odm/etc/build.prop)
+ro.product.property_source_order=odm,product,vendor,system_ext,system
+ro.product.odm.cert=2109119BC
+ro.product.odm.marketname=Xiaomi Civi

@@ -1,0 +1,48 @@
+From 9a7b4c2d8e1f0356a4b9c8d7e6f5a4b3c2d1e0f9 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi Port <mona-port@lineageos.local>
+Date: Tue, 24 Nov 2026 01:31:00 +0800
+Subject: [PATCH 4/4] arm64: dts: qcom: Build only mona overlay for
+ TARGET_PRODUCT=mona
+
+Xiaomi Civi 1 (mona) has a 16 MiB dtbo partition (16,777,216 bytes;
+maximum AVB hash-footer image payload 16,707,584 bytes), smaller than
+the 24 MiB dtbo partition on lisa/venus.
+
+Packing all 73 LAHAINA/SHIMA/YUPIK overlays from vendor/qcom/Makefile
+produces a 19.99 MiB dtbo.img that overflows mona's dtbo partition and
+fails avbtool add_hash_footer.
+
+When TARGET_PRODUCT=mona is passed by BoardConfigCommon.mk
+(TARGET_KERNEL_ADDITIONAL_FLAGS := TARGET_PRODUCT=$(PRODUCT_DEVICE)),
+build only mona-sm7325-overlay.dtbo and its base yupik.dtb, shrinking
+dtbo.img from 19.99 MiB to ~252 KiB while leaving all other sm8350
+targets untouched.
+---
+ arch/arm64/boot/dts/vendor/qcom/Makefile | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/vendor/qcom/Makefile b/arch/arm64/boot/dts/vendor/qcom/Makefile
+index 8e83c2a..1d4a7f2 100644
+--- a/arch/arm64/boot/dts/vendor/qcom/Makefile
++++ b/arch/arm64/boot/dts/vendor/qcom/Makefile
+@@ -1,4 +1,10 @@
+ ifneq ($(CONFIG_ARCH_QTI_VM), y)
++ifeq ($(TARGET_PRODUCT),mona)
++ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
++dtbo-$(CONFIG_ARCH_YUPIK) += mona-sm7325-overlay.dtbo
++mona-sm7325-overlay.dtbo-base := yupik.dtb
++endif
++else
+ ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
+ dtbo-$(CONFIG_ARCH_LAHAINA) += lahaina-rumi-overlay.dtbo \
+ 	lahaina-mtp-overlay.dtbo \
+@@ -477,6 +483,7 @@ else
+ endif
+ 
+ dtb-$(CONFIG_ARCH_SA2150P) += sa2150p-ccard-emmc.dtb
++endif # TARGET_PRODUCT == mona
+ endif
+ 
+ ifeq ($(CONFIG_ARCH_LAHAINA), y)
+-- 
+2.43.0

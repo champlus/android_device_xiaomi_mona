@@ -1,0 +1,135 @@
+From 792d722df62a25f097437b085a52362402bc05b4 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+Date: Tue, 24 Nov 2026 16:14:26 +0800
+Subject: [PATCH 9/9] usb: typec: ucsi: glink: Support Xiaomi swap-role
+ notification (0x14)
+
+Stock OS1.0.2.0.TKVCNXM ucsi_glink.ko on Xiaomi Civi 1 (mona) handles
+opcode 0x14 (UC_UCSI_SWAP_ROLE_IND, MI SMART INTERCHG) from ADSP
+charger_pd by scheduling UCSI_SET_PDR and UCSI_SET_UOR role swaps.
+Without this handler, ucsi_glink drops opcode 0x14 with 'Unknown message
+opcode: 20', breaking ADSP-initiated USB-C DRP role recovery.
+
+Change-Id: I1c95dee3b26323033363cec27d0a46658886f634
+Signed-off-by: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+---
+ drivers/usb/typec/ucsi/ucsi_glink.c | 61 +++++++++++++++++++++++++++++
+ 1 file changed, 61 insertions(+)
+
+diff --git a/drivers/usb/typec/ucsi/ucsi_glink.c b/drivers/usb/typec/ucsi/ucsi_glink.c
+index 1df57ee1d..8b7c4aded 100644
+--- a/drivers/usb/typec/ucsi/ucsi_glink.c
++++ b/drivers/usb/typec/ucsi/ucsi_glink.c
+@@ -5,6 +5,7 @@
+ 
+ #define pr_fmt(fmt)	"UCSI: %s: " fmt, __func__
+ 
++#include <linux/delay.h>
+ #include <linux/device.h>
+ #include <linux/ipc_logging.h>
+ #include <linux/module.h>
+@@ -26,6 +27,7 @@
+ #define UC_UCSI_READ_BUF_REQ		0x11
+ #define UC_UCSI_WRITE_BUF_REQ		0x12
+ #define UC_UCSI_USBC_NOTIFY_IND		0x13
++#define UC_UCSI_SWAP_ROLE_IND		0x14
+ 
+ /* Generic definitions */
+ #define CMD_PENDING			1
+@@ -85,6 +87,9 @@ struct ucsi_dev {
+ 	struct ucsi_glink_constat_info	constat_info;
+ 	struct work_struct		notify_work;
+ 	struct work_struct		setup_work;
++	struct work_struct		swap_role_work;
++	u64				swap_pdr_cmd;
++	u64				swap_uor_cmd;
+ 	atomic_t			state;
+ };
+ 
+@@ -240,6 +245,58 @@ static int handle_ucsi_notify(struct ucsi_dev *udev, void *data, size_t len)
+ 	return 0;
+ }
+ 
++static void swap_role_work_func(struct work_struct *work)
++{
++	struct ucsi_dev *udev = container_of(work, struct ucsi_dev,
++					     swap_role_work);
++	int rc;
++
++	if (!udev || !udev->ucsi)
++		return;
++
++	rc = ucsi_send_command(udev->ucsi, udev->swap_pdr_cmd, NULL, 0);
++	if (rc)
++		return;
++
++	pr_info("MI SMART INTERCHG, success to swap power role\n");
++	msleep(100);
++
++	rc = ucsi_send_command(udev->ucsi, udev->swap_uor_cmd, NULL, 0);
++	if (!rc)
++		pr_info("MI SMART INTERCHG, success to swap data role\n");
++}
++
++static int handle_ucsi_notify_swap_role(struct ucsi_dev *udev, void *data,
++					size_t len)
++{
++	struct ucsi_notify_ind_msg *msg_ptr;
++	u32 cmd, target_pr, target_dr;
++
++	if (len != sizeof(*msg_ptr)) {
++		pr_err("Incorrect received length %zu expected %zu\n", len,
++			sizeof(*msg_ptr));
++		return -EINVAL;
++	}
++
++	msg_ptr = data;
++	cmd = msg_ptr->notification;
++	target_pr = cmd & 0x1;
++	target_dr = (cmd >> 1) & 0x1;
++
++	udev->swap_pdr_cmd = UCSI_SET_PDR | UCSI_CONNECTOR_NUMBER(1) |
++		UCSI_SET_PDR_ROLE(target_pr ? TYPEC_SOURCE : TYPEC_SINK) |
++		UCSI_SET_PDR_ACCEPT_ROLE_SWAPS;
++	udev->swap_uor_cmd = UCSI_SET_UOR | UCSI_CONNECTOR_NUMBER(1) |
++		UCSI_SET_UOR_ROLE(target_dr ? TYPEC_HOST : TYPEC_DEVICE) |
++		UCSI_SET_UOR_ACCEPT_ROLE_SWAPS;
++
++	pr_info("MI SMART INTERCHG, cmd = 0x%08x, target_pr = %u, target_dr = %u\n",
++		cmd, target_pr, target_dr);
++	schedule_work(&udev->swap_role_work);
++
++	return 0;
++}
++
+ static int ucsi_callback(void *priv, void *data, size_t len)
+ {
+ 	struct pmic_glink_hdr *hdr = data;
+@@ -254,6 +311,8 @@ static int ucsi_callback(void *priv, void *data, size_t len)
+ 		handle_ucsi_write_ack(udev, data, len);
+ 	else if (hdr->opcode == UC_UCSI_USBC_NOTIFY_IND)
+ 		handle_ucsi_notify(udev, data, len);
++	else if (hdr->opcode == UC_UCSI_SWAP_ROLE_IND)
++		handle_ucsi_notify_swap_role(udev, data, len);
+ 	else
+ 		pr_err("Unknown message opcode: %d\n", hdr->opcode);
+ 
+@@ -576,6 +635,7 @@ static int ucsi_probe(struct platform_device *pdev)
+ 
+ 	INIT_WORK(&udev->notify_work, ucsi_qti_notify_work);
+ 	INIT_WORK(&udev->setup_work, ucsi_qti_setup_work);
++	INIT_WORK(&udev->swap_role_work, swap_role_work_func);
+ 	mutex_init(&udev->read_lock);
+ 	mutex_init(&udev->write_lock);
+ 	mutex_init(&udev->notify_lock);
+@@ -624,6 +684,7 @@ static int ucsi_remove(struct platform_device *pdev)
+ 	struct ucsi_dev *udev = dev_get_drvdata(dev);
+ 	int rc;
+ 
++	cancel_work_sync(&udev->swap_role_work);
+ 	cancel_work_sync(&udev->notify_work);
+ 	ucsi_unregister(udev->ucsi);
+ 	ucsi_destroy(udev->ucsi);
+-- 
+2.43.0
+

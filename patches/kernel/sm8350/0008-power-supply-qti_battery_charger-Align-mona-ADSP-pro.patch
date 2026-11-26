@@ -1,0 +1,170 @@
+From f521e6805930c4143cdf7301522f2a9539195489 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+Date: Tue, 24 Nov 2026 16:13:06 +0800
+Subject: [PATCH 8/9] power: supply: qti_battery_charger: Align mona ADSP
+ property ABI and fix log spam
+
+Stock OS1.0.2.0.TKVCNXM QGKI /vendor/lib/modules/qti_battery_charger_main_k8.ko
+(vermagic 5.4.233-qgki-g1e646a5c8cd5, matching stock boot.img) on Xiaomi Civi 1
+(mona / K9B) uses a 99-entry enum xm_property_id (0..98, xm_prop_map 0x18c B)
+and 32-byte battery authentication digests (0x34 = 52 B glink payload):
+- CONFIG_BQ2597X=y (indices 11..20)
+- CONFIG_BQ_FG_1S=y (BATTERY_DIGEST_LEN=32)
+- CONFIG_BQ_FUEL_GAUGE=y (power_supply_read_temp reading XM_PROP_THERMAL_TEMP=0x4a)
+- CONFIG_BQ_CLOUD_AUTHENTICATION=y (indices 91..93)
+- CONFIG_MONA_FOR_BUILD=y: omits XM_PROP_VDM_CMD_SINK_SOC and
+  XM_PROP_FG_UPDATE_TIME, enables SHIPMODE_COUNT_RESET..FG_VENDOR_ID at 94..98
+
+Also schedule fb_notifier_work asynchronously in fb_notifier_callback()
+(XM_PROP_FB_BLANK_STATE=0x49) and downgrade chg_suspend/chg_resume and
+batt_thermal pr_err to pr_debug to prevent kmsg wrap.
+
+Change-Id: I34a21fa4001cf43166e8199d357b8841f7826c9f
+Signed-off-by: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+---
+ arch/arm64/configs/vendor/mona_QGKI.config        |  3 +++
+ drivers/power/supply/Kconfig                      |  6 ++++++
+ drivers/power/supply/qti_battery_charger.c        | 12 ++++--------
+ drivers/power/supply/qti_battery_charger.h        |  6 +++---
+ drivers/power/supply/qti_battery_charger_xiaomi.c |  4 ++--
+ 5 files changed, 18 insertions(+), 13 deletions(-)
+
+diff --git a/arch/arm64/configs/vendor/mona_QGKI.config b/arch/arm64/configs/vendor/mona_QGKI.config
+index 817fafed2..eff57aa9e 100644
+--- a/arch/arm64/configs/vendor/mona_QGKI.config
++++ b/arch/arm64/configs/vendor/mona_QGKI.config
+@@ -17,7 +17,10 @@ CONFIG_PINCTRL_SM7325=y
+ 
+ # Power Supply
+ CONFIG_BQ2597X=y
++CONFIG_BQ_FG_1S=y
+ CONFIG_BQ_FUEL_GAUGE=y
++CONFIG_BQ_CLOUD_AUTHENTICATION=y
++CONFIG_MONA_FOR_BUILD=y
+ 
+ # Proximity
+ CONFIG_MIUS_PROXIMITY=y
+diff --git a/drivers/power/supply/Kconfig b/drivers/power/supply/Kconfig
+index 4245df90a..42a6c645b 100644
+--- a/drivers/power/supply/Kconfig
++++ b/drivers/power/supply/Kconfig
+@@ -478,6 +478,12 @@ config VENUS_FOR_BUILD
+ 	help
+ 	  Say Y here to enable venus build debug
+ 
++config MONA_FOR_BUILD
++	bool "mona build support"
++	depends on QTI_BATTERY_CHARGER
++	help
++	  Say Y here to align QTI battery charger ADSP properties with mona (K9B) stock firmware
++
+ config CHARGER_88PM860X
+ 	tristate "Marvell 88PM860x Charger driver"
+ 	depends on MFD_88PM860X && BATTERY_88PM860X
+diff --git a/drivers/power/supply/qti_battery_charger.c b/drivers/power/supply/qti_battery_charger.c
+index 341421637..476507546 100644
+--- a/drivers/power/supply/qti_battery_charger.c
++++ b/drivers/power/supply/qti_battery_charger.c
+@@ -1184,7 +1184,7 @@ static int power_supply_read_temp(struct thermal_zone_device *tzd,
+ 	}
+ 
+ 	*temp = batt_temp * 1000;
+-	pr_err("batt_thermal temp:%d ,delta:%ld blank_state=%d chg_type=%s tl:=%d  ffc:=%d, pd_verifed:=%d\n",
++	pr_debug("batt_thermal temp:%d ,delta:%ld blank_state=%d chg_type=%s tl:=%d  ffc:=%d, pd_verifed:=%d\n",
+ 		batt_temp,delta, bcdev->blank_state, power_supply_usb_type_text[pst->prop[XM_PROP_REAL_TYPE]],
+ 		bcdev->curr_thermal_level, pst->prop[XM_PROP_FASTCHGMODE], pst->prop[XM_PROP_PD_VERIFED]);
+ 	return 0;
+@@ -2036,7 +2036,6 @@ static int fb_notifier_callback(struct notifier_block *nb,
+ 						     fb_notifier);
+ 	struct mi_disp_notifier *evdata = data;
+ 	unsigned int blank;
+-	int rc;
+ 
+ 	if(val != MI_DISP_DPMS_EVENT)
+ 		return NOTIFY_OK;
+@@ -2052,10 +2051,7 @@ static int fb_notifier_callback(struct notifier_block *nb,
+ 			bcdev->blank_state = FB_UNBLANK;
+ 		}
+ 
+-		rc = write_property_id(bcdev, &bcdev->psy_list[PSY_TYPE_XM],
+-				XM_PROP_FB_BLANK_STATE, bcdev->blank_state);
+-		if (rc < 0)
+-			return rc;
++		schedule_work(&bcdev->fb_notifier_work);
+ 	}
+ 	return NOTIFY_OK;
+ }
+@@ -2241,7 +2237,7 @@ static int chg_suspend(struct device *dev)
+ {
+ 	//struct battery_chg_dev *bcdev = dev_get_drvdata(dev);
+ 
+-	pr_err("chg suspend\n");
++	pr_debug("chg suspend\n");
+ 	return 0;
+ }
+ 
+@@ -2249,7 +2245,7 @@ static int chg_resume(struct device *dev)
+ {
+ 	//struct battery_chg_dev *bcdev = dev_get_drvdata(dev);
+ 
+-	pr_err("chg resume\n");
++	pr_debug("chg resume\n");
+ 	return 0;
+ }
+ static const struct of_device_id battery_chg_match_table[] = {
+diff --git a/drivers/power/supply/qti_battery_charger.h b/drivers/power/supply/qti_battery_charger.h
+index 1374b8c81..caf366da6 100644
+--- a/drivers/power/supply/qti_battery_charger.h
++++ b/drivers/power/supply/qti_battery_charger.h
+@@ -258,7 +258,7 @@ enum xm_property_id {
+ 	XM_PROP_PD_VERIFED,
+ 	XM_PROP_PDO2,
+ 	XM_PROP_UVDM_STATE,
+-#if !defined(CONFIG_VENUS_FOR_BUILD) && !defined(CONFIG_REDWOOD_FOR_BUILD)
++#if !defined(CONFIG_VENUS_FOR_BUILD) && !defined(CONFIG_REDWOOD_FOR_BUILD) && !defined(CONFIG_MONA_FOR_BUILD)
+ 	/* use for MI SMART INTERCHG */
+ 	XM_PROP_VDM_CMD_SINK_SOC,
+ #endif
+@@ -294,7 +294,7 @@ enum xm_property_id {
+ 	XM_PROP_FG1_TAMBIENT,
+ 	XM_PROP_FG1_TREMQ,
+ 	XM_PROP_FG1_TFULLQ,
+-#if !defined(CONFIG_REDWOOD_FOR_BUILD)
++#if !defined(CONFIG_REDWOOD_FOR_BUILD) && !defined(CONFIG_MONA_FOR_BUILD)
+ 	XM_PROP_FG_UPDATE_TIME,
+ #endif
+ #if defined(CONFIG_REDWOOD_FOR_BUILD)
+@@ -316,7 +316,7 @@ enum xm_property_id {
+ 	XM_PROP_SERVER_RESULT,
+ 	XM_PROP_ADSP_RESULT,
+ #endif
+-#if defined(CONFIG_REDWOOD_FOR_BUILD)
++#if defined(CONFIG_REDWOOD_FOR_BUILD) || defined(CONFIG_MONA_FOR_BUILD)
+ 	XM_PROP_SHIPMODE_COUNT_RESET,
+ 	XM_PROP_SPORT_MODE,
+ 	XM_PROP_CELL1_VOLT,
+diff --git a/drivers/power/supply/qti_battery_charger_xiaomi.c b/drivers/power/supply/qti_battery_charger_xiaomi.c
+index 4d332757d..af55db45a 100644
+--- a/drivers/power/supply/qti_battery_charger_xiaomi.c
++++ b/drivers/power/supply/qti_battery_charger_xiaomi.c
+@@ -3162,7 +3162,7 @@ static ssize_t adsp_result_show(struct class *c,
+ static CLASS_ATTR_RO(adsp_result);
+ #endif
+ 
+-#if defined(CONFIG_REDWOOD_FOR_BUILD)
++#if defined(CONFIG_REDWOOD_FOR_BUILD) || defined(CONFIG_MONA_FOR_BUILD)
+ static ssize_t shipmode_count_reset_store(struct class *c,
+ 					struct class_attribute *attr,
+ 					const char *buf, size_t count)
+@@ -3466,7 +3466,7 @@ static struct attribute *xiaomi_battery_class_attrs[] = {
+ 	&class_attr_server_result.attr,
+ 	&class_attr_adsp_result.attr,
+ #endif
+-#if defined(CONFIG_REDWOOD_FOR_BUILD)
++#if defined(CONFIG_REDWOOD_FOR_BUILD) || defined(CONFIG_MONA_FOR_BUILD)
+ 	&class_attr_shipmode_count_reset.attr,
+ 	&class_attr_sport_mode.attr,
+ 	&class_attr_cell1_volt.attr,
+-- 
+2.43.0
+

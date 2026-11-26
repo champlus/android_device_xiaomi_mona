@@ -1,0 +1,32 @@
+From 6443a99e4dc017d1a2e43953a6d64ef95b8b4ea9 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi Port <mona-port@lineageos.local>
+Date: Mon, 23 Nov 2026 14:00:13 +0800
+Subject: [PATCH 2/3] arm64: dts: k9b: Specify mi,local-hbm-on-1000nit-51-index
+ for mona
+
+In dsi-panel-k9b-42-02-0a-dsc-cmd.dtsi, command index 6 of
+mi,mdss-dsi-local-hbm-normal-white-1000nit-command is the DCS register
+0x51 brightness packet (39 00 00 00 00 00 03 51 07 FF).
+
+Set mi,local-hbm-on-1000nit-51-index = <6> so dsi_panel_update_cmd_reg51()
+injects the current display brightness instead of failing with -EINVAL and
+flashing the full panel to max brightness during optical UDFPS LHBM.
+---
+ .../dts/vendor/qcom/display/dsi-panel-k9b-42-02-0a-dsc-cmd.dtsi  | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/boot/dts/vendor/qcom/display/dsi-panel-k9b-42-02-0a-dsc-cmd.dtsi b/arch/arm64/boot/dts/vendor/qcom/display/dsi-panel-k9b-42-02-0a-dsc-cmd.dtsi
+index 2f33eaa..ced2340 100644
+--- a/arch/arm64/boot/dts/vendor/qcom/display/dsi-panel-k9b-42-02-0a-dsc-cmd.dtsi
++++ b/arch/arm64/boot/dts/vendor/qcom/display/dsi-panel-k9b-42-02-0a-dsc-cmd.dtsi
+@@ -368,6 +368,7 @@
+ 	mi,thermal-dimming-flag;
+ 
+ 	mi,local-hbm-enabled;
++	mi,local-hbm-on-1000nit-51-index = <6>;
+ 	mi,local-hbm-off-to-hbm-51-index = <1>;
+ 	mi,local-hbm-off-to-normal-51-index = <1>;
+ 	mi,local-hbm-on-87-index = <5>;
+-- 
+2.43.0
+

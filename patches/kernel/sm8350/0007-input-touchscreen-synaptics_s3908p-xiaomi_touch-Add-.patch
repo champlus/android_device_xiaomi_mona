@@ -1,0 +1,207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+Date: Tue, 24 Nov 2026 14:35:00 +0800
+Subject: [PATCH] input: touchscreen: synaptics_s3908p: xiaomi_touch: Add fod_finger_down BTN_INFO trigger
+
+On Xiaomi Civi 1 (mona), the Goodix optical UDFPS HAL (libgf_hal.so) waits
+for BTN_INFO (0x152) input key events from the Synaptics S3908P touchscreen
+to start/stop fingerprint capture. While S3908P firmware emits BTN_INFO in
+screen-off/AOD gesture mode (touch_fod_down_event), during screen-on
+enrollment and authentication the firmware only reports standard MT finger
+events, so libgf_hal.so never starts capture even after LHBM (fod_ui=1)
+sends COMMAND_NIT.
+
+Expose a dedicated writable sysfs attribute
+`/sys/devices/virtual/touch/touch_dev/fod_finger_down` on xiaomi_touch and
+wire it to `touch_report_fod_btn_info()` in synaptics_s3908p:
+- Emits BTN_INFO=1/0 on the S3908P input device under `report_mutex`,
+  deduplicated with `tcm_hcd->fod_display_enabled` so screen-off/AOD
+  firmware gestures and userspace UdfpsHandler calls never double-emit.
+- Intentionally does NOT notify `fod_press_status` so `org.lineageos.sensor.udfps`
+  (AOD wake sensor) sees zero side effects during screen-on auth.
+- Releases any active `fod_display_enabled` BTN_INFO state in
+  `touch_free_objects()` so suspend/reset never leaves BTN_INFO stuck down.
+
+Signed-off-by: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+---
+ .../synaptics_s3908p/synaptics_tcm_core.c     |  1 +
+ .../synaptics_s3908p/synaptics_tcm_core.h     |  2 ++
+ .../synaptics_s3908p/synaptics_tcm_touch.c    | 38 +++++++++++++++++--
+ .../input/touchscreen/xiaomi/xiaomi_touch.c   | 43 +++++++++++++++++++
+ .../input/touchscreen/xiaomi/xiaomi_touch.h   |  2 +
+ 5 files changed, 82 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
+index 111111111111..222222222222 100755
+--- a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
++++ b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
+@@ -6175,6 +6175,7 @@ static int syna_tcm_probe(struct platform_device *pdev)
+ 	p_xiaomi_touch_interfaces->getModeAll = syna_tcm_get_mode_all;
+ 	p_xiaomi_touch_interfaces->resetMode = syna_tcm_reset_mode;
+ 	p_xiaomi_touch_interfaces->palm_sensor_write = syna_tcm_palm_sensor_write;
++	p_xiaomi_touch_interfaces->set_fod_finger_down = touch_report_fod_btn_info;
+ 	p_xiaomi_touch_interfaces->get_touch_rx_num = NULL;
+ 	p_xiaomi_touch_interfaces->get_touch_tx_num = NULL;
+ 	p_xiaomi_touch_interfaces->get_touch_x_resolution = NULL;
+diff --git a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.h b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.h
+index 333333333333..444444444444 100644
+--- a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.h
++++ b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.h
+@@ -933,4 +933,6 @@ int touch_flush_slots(struct syna_tcm_hcd *tcm_hcd);
+ 
+ void touch_fod_test(int value);
+ 
++int touch_report_fod_btn_info(int down);
++
+ #endif
+diff --git a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c
+index 555555555555..666666666666 100644
+--- a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c
++++ b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_touch.c
+@@ -205,10 +205,38 @@ static void touch_fod_up_event(void)
+ 	struct syna_tcm_hcd *tcm_hcd = touch_hcd->tcm_hcd;
+ 
+ 	LOGI(tcm_hcd->pdev->dev.parent, "FOD UP Detected\n");
+-	input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
+-	input_sync(touch_hcd->input_dev);
++	if (tcm_hcd->fod_display_enabled) {
++		input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
++		input_sync(touch_hcd->input_dev);
++		tcm_hcd->fod_display_enabled = false;
++	}
+ 	update_fod_press_status(0);
+-	tcm_hcd->fod_display_enabled = false;
++}
++
++int touch_report_fod_btn_info(int down)
++{
++	struct syna_tcm_hcd *tcm_hcd;
++
++	if (!touch_hcd || !touch_hcd->input_dev || !touch_hcd->tcm_hcd)
++		return -ENODEV;
++
++	tcm_hcd = touch_hcd->tcm_hcd;
++
++	mutex_lock(&touch_hcd->report_mutex);
++	if (down && !tcm_hcd->fod_display_enabled) {
++		input_report_key(touch_hcd->input_dev, BTN_INFO, 1);
++		input_sync(touch_hcd->input_dev);
++		tcm_hcd->fod_display_enabled = true;
++		LOGI(tcm_hcd->pdev->dev.parent, "FOD BTN_INFO DOWN (userspace)\n");
++	} else if (!down && tcm_hcd->fod_display_enabled) {
++		input_report_key(touch_hcd->input_dev, BTN_INFO, 0);
++		input_sync(touch_hcd->input_dev);
++		tcm_hcd->fod_display_enabled = false;
++		LOGI(tcm_hcd->pdev->dev.parent, "FOD BTN_INFO UP (userspace)\n");
++	}
++	mutex_unlock(&touch_hcd->report_mutex);
++
++	return 0;
+ }
+ 
+ int touch_flush_slots(struct syna_tcm_hcd *tcm_hcd)
+@@ -271,7 +299,7 @@ int touch_free_objects(struct syna_tcm_hcd *tcm_hcd)
+ 	mutex_lock(&touch_hcd->report_mutex);
+ 
+ 	/* clear FOD finger flag */
+-	if (tcm_hcd->fod_finger) {
++	if (tcm_hcd->fod_finger || tcm_hcd->fod_display_enabled) {
+ 		tcm_hcd->fod_finger = false;
+ 		/*For FOD_STATUS_DELETED */
+ 		LOGN(tcm_hcd->pdev->dev.parent, "touch free FOD event\n");
+diff --git a/drivers/input/touchscreen/xiaomi/xiaomi_touch.c b/drivers/input/touchscreen/xiaomi/xiaomi_touch.c
+index 777777777777..888888888888 100644
+--- a/drivers/input/touchscreen/xiaomi/xiaomi_touch.c
++++ b/drivers/input/touchscreen/xiaomi/xiaomi_touch.c
+@@ -272,6 +272,8 @@ int xiaomitouch_register_modedata(int touchId, struct xiaomi_touch_interface *da
+ 		touch_data->enable_touch_delta = data->enable_touch_delta;
+ 	if (data->enable_clicktouch_raw)
+ 		touch_data->enable_clicktouch_raw = data->enable_clicktouch_raw;
++	if (data->set_fod_finger_down)
++		touch_data->set_fod_finger_down = data->set_fod_finger_down;
+ 
+ 	mutex_unlock(&xiaomi_touch_dev.mutex);
+ 
+@@ -1014,6 +1016,42 @@ static ssize_t fod_longpress_gesture_enabled_store(struct device *dev,
+ 	return count;
+ }
+ 
++static ssize_t fod_finger_down_show(struct device *dev,
++				    struct device_attribute *attr, char *buf)
++{
++	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
++
++	if (!pdata)
++		return -ENODEV;
++
++	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->fod_finger_down);
++}
++
++static ssize_t fod_finger_down_store(struct device *dev,
++				     struct device_attribute *attr,
++				     const char *buf, size_t count)
++{
++	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
++	struct xiaomi_touch_interface *touch_data;
++	unsigned int val = 0;
++
++	if (!pdata)
++		return -ENODEV;
++
++	if (kstrtouint(buf, 10, &val))
++		return -EINVAL;
++
++	touch_data = pdata->touch_data[0];
++
++	mutex_lock(&xiaomi_touch_dev.mutex);
++	pdata->fod_finger_down = val ? 1 : 0;
++	if (touch_data && touch_data->set_fod_finger_down)
++		touch_data->set_fod_finger_down(pdata->fod_finger_down);
++	mutex_unlock(&xiaomi_touch_dev.mutex);
++
++	return count;
++}
++
+ static DEVICE_ATTR(touch_thp_cmd, (S_IRUGO | S_IWUSR | S_IWGRP),
+ 			thp_cmd_status_show, thp_cmd_status_store);
+ 
+@@ -1078,6 +1117,9 @@ static DEVICE_ATTR(fod_press_status, (0664), fod_press_status_show, NULL);
+ static DEVICE_ATTR(fod_longpress_gesture_enabled, (S_IRUGO | S_IWUSR | S_IWGRP),
+ 		   fod_longpress_gesture_enabled_show, fod_longpress_gesture_enabled_store);
+ 
++static DEVICE_ATTR(fod_finger_down, (S_IRUGO | S_IWUSR | S_IWGRP),
++		   fod_finger_down_show, fod_finger_down_store);
++
+ static struct attribute *touch_attr_group[] = {
+ 	&dev_attr_enable_touch_raw.attr,
+ 	&dev_attr_enable_touch_delta.attr,
+@@ -1104,6 +1146,7 @@ static struct attribute *touch_attr_group[] = {
+ 	&dev_attr_suspend_state.attr,
+ 	&dev_attr_fod_press_status.attr,
+ 	&dev_attr_fod_longpress_gesture_enabled.attr,
++	&dev_attr_fod_finger_down.attr,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/input/touchscreen/xiaomi/xiaomi_touch.h b/drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+index 999999999999..aaaaaaaaaaaa 100644
+--- a/drivers/input/touchscreen/xiaomi/xiaomi_touch.h
++++ b/drivers/input/touchscreen/xiaomi/xiaomi_touch.h
+@@ -104,6 +104,7 @@ struct xiaomi_touch_interface {
+ 	int (*enable_touch_raw)(int en);
+ 	int (*enable_clicktouch_raw)(int count);
+ 	int (*enable_touch_delta)(bool en);
++	int (*set_fod_finger_down)(int down);
+ 	u8 (*panel_vendor_read)(void);
+ 	u8 (*panel_color_read)(void);
+ 	u8 (*panel_display_read)(void);
+@@ -171,6 +172,7 @@ struct xiaomi_touch_pdata{
+ 	const char *name;
+ 	int fod_press_status_value;
+ 	int fod_longpress_gesture_enabled;
++	int fod_finger_down;
+ 	struct proc_dir_entry  *last_touch_events_proc;
+ 	struct last_touch_event *last_touch_events;
+ };
+-- 
+2.43.0

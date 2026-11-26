@@ -1,0 +1,360 @@
+From 39f612a3c77320e999c048fdbb76728cde7f7f63 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+Date: Tue, 24 Nov 2026 22:01:48 +0800
+Subject: [PATCH] ksu: Integrate KernelSU-Next (legacy) with manual hooks for
+ mona
+
+Wire KernelSU-Next legacy branch (drivers/kernelsu -> ../KernelSU-Next/kernel)
+for Xiaomi Civi 1 (mona, non-GKI 5.4.302-qgki with Clang 22 LTO + strict CFI):
+- Enable CONFIG_KSU=y and CONFIG_KSU_MANUAL_HOOK=y in mona_QGKI.config
+  (avoids kprobes <5.10 issues and sys_call_table RO/CFI patching risks;
+   ensures sys_reboot supercall and init.rc injection hooks are always active)
+- Backport can_umount() and path_umount() in fs/namespace.c & fs/internal.h
+  so Kbuild never mutates read-only srctree inside Soong sandbox
+- Add manual hooks in kernel/reboot.c, fs/exec.c (do_execveat_common,
+  handling both execve and Android 17 Bionic execveat), fs/open.c,
+  fs/read_write.c, fs/stat.c (vfs_statx + newfstat/fstat64),
+  drivers/input/input.c, and security/selinux/avc.c
+
+Change-Id: I9c4d1e2a7f3b5819a2d6c8e04b7a3f1e5d2c9a80
+Signed-off-by: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+---
+ arch/arm64/configs/vendor/mona_QGKI.config |  4 +++
+ drivers/Kconfig                            |  2 ++
+ drivers/Makefile                           |  1 +
+ drivers/input/input.c                      | 11 ++++++++
+ drivers/kernelsu                           |  1 +
+ fs/exec.c                                  | 14 +++++++++
+ fs/internal.h                              |  1 +
+ fs/namespace.c                             | 33 ++++++++++++++++++++++
+ fs/open.c                                  |  9 ++++++
+ fs/read_write.c                            | 11 ++++++++
+ fs/stat.c                                  | 27 ++++++++++++++++--
+ kernel/reboot.c                            |  9 ++++++
+ security/selinux/avc.c                     |  8 ++++++
+ 13 files changed, 129 insertions(+), 2 deletions(-)
+ create mode 120000 drivers/kernelsu
+
+diff --git a/arch/arm64/configs/vendor/mona_QGKI.config b/arch/arm64/configs/vendor/mona_QGKI.config
+index eff57aa9e..f2207223b 100644
+--- a/arch/arm64/configs/vendor/mona_QGKI.config
++++ b/arch/arm64/configs/vendor/mona_QGKI.config
+@@ -37,3 +37,7 @@ CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE=m
+ 
+ # WiFi
+ CONFIG_CNSS_QCA6750=y
++
++# KernelSU-Next (legacy non-GKI 5.4, manual hooks for LTO+CFI safety)
++CONFIG_KSU=y
++CONFIG_KSU_MANUAL_HOOK=y
+diff --git a/drivers/Kconfig b/drivers/Kconfig
+index 7e846235c..141b0d03e 100644
+--- a/drivers/Kconfig
++++ b/drivers/Kconfig
+@@ -232,4 +232,6 @@ source "drivers/counter/Kconfig"
+ 
+ source "drivers/uwb-sr100/Kconfig"
+ 
++source "drivers/kernelsu/Kconfig"
++
+ endmenu
+diff --git a/drivers/Makefile b/drivers/Makefile
+index 6d3289517..30ca83855 100644
+--- a/drivers/Makefile
++++ b/drivers/Makefile
+@@ -187,3 +187,4 @@ obj-$(CONFIG_GNSS)		+= gnss/
+ obj-$(CONFIG_INTERCONNECT)	+= interconnect/
+ obj-$(CONFIG_COUNTER)		+= counter/
+ obj-$(CONFIG_NXP_SR100)         += uwb-sr100/
++obj-$(CONFIG_KSU)		+= kernelsu/
+diff --git a/drivers/input/input.c b/drivers/input/input.c
+index 45fdb9bdf..699d05e78 100644
+--- a/drivers/input/input.c
++++ b/drivers/input/input.c
+@@ -375,11 +375,22 @@ static int input_get_disposition(struct input_dev *dev,
+ 	return disposition;
+ }
+ 
++#ifdef CONFIG_KSU
++extern bool ksu_input_hook __read_mostly;
++extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code,
++					 int *value);
++#endif
++
+ static void input_handle_event(struct input_dev *dev,
+ 			       unsigned int type, unsigned int code, int value)
+ {
+ 	int disposition = input_get_disposition(dev, type, code, &value);
+ 
++#ifdef CONFIG_KSU
++	if (unlikely(ksu_input_hook))
++		ksu_handle_input_handle_event(&type, &code, &value);
++#endif
++
+ 	if (disposition != INPUT_IGNORE_EVENT && type != EV_SYN)
+ 		add_input_randomness(type, code, value);
+ 
+diff --git a/drivers/kernelsu b/drivers/kernelsu
+new file mode 120000
+index 000000000..b32a3654a
+--- /dev/null
++++ b/drivers/kernelsu
+@@ -0,0 +1 @@
++../KernelSU-Next/kernel
+\ No newline at end of file
+diff --git a/fs/exec.c b/fs/exec.c
+index 910b407d2..c942b3571 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1904,11 +1904,25 @@ static int __do_execve_file(int fd, struct filename *filename,
+ 	return retval;
+ }
+ 
++#ifdef CONFIG_KSU
++extern bool ksu_execveat_hook __read_mostly;
++extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
++			       void *envp, int *flags);
++extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
++					void *argv, void *envp, int *flags);
++#endif
++
+ static int do_execveat_common(int fd, struct filename *filename,
+ 			      struct user_arg_ptr argv,
+ 			      struct user_arg_ptr envp,
+ 			      int flags)
+ {
++#ifdef CONFIG_KSU
++	if (unlikely(ksu_execveat_hook))
++		ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
++	else
++		ksu_handle_execveat_sucompat(&fd, &filename, NULL, NULL, NULL);
++#endif
+ 	return __do_execve_file(fd, filename, argv, envp, flags, NULL);
+ }
+ 
+diff --git a/fs/internal.h b/fs/internal.h
+index 377f984e9..9badc3b8c 100644
+--- a/fs/internal.h
++++ b/fs/internal.h
+@@ -85,6 +85,7 @@ extern int finish_automount(struct vfsmount *, struct path *);
+ extern int sb_prepare_remount_readonly(struct super_block *);
+ 
+ extern void __init mnt_init(void);
++int path_umount(struct path *path, int flags);
+ 
+ extern int __mnt_want_write_file(struct file *);
+ extern void __mnt_drop_write_file(struct file *);
+diff --git a/fs/namespace.c b/fs/namespace.c
+index 176bccdf6..8434955f3 100644
+--- a/fs/namespace.c
++++ b/fs/namespace.c
+@@ -1756,6 +1756,39 @@ SYSCALL_DEFINE1(oldumount, char __user *, name)
+ 
+ #endif
+ 
++static int can_umount(const struct path *path, int flags)
++{
++	struct mount *mnt = real_mount(path->mnt);
++
++	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
++		return -EINVAL;
++	if (!may_mount())
++		return -EPERM;
++	if (path->dentry != path->mnt->mnt_root)
++		return -EINVAL;
++	if (!check_mnt(mnt))
++		return -EINVAL;
++	if (mnt->mnt.mnt_flags & MNT_LOCKED)
++		return -EINVAL;
++	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++	return 0;
++}
++
++int path_umount(struct path *path, int flags)
++{
++	struct mount *mnt = real_mount(path->mnt);
++	int ret;
++
++	ret = can_umount(path, flags);
++	if (!ret)
++		ret = do_umount(mnt, flags);
++
++	dput(path->dentry);
++	mntput_no_expire(mnt);
++	return ret;
++}
++
+ static bool is_mnt_ns_file(struct dentry *dentry)
+ {
+ 	/* Is this a proxy for a mount namespace? */
+diff --git a/fs/open.c b/fs/open.c
+index 3f9f5fda8..65b206e61 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -345,6 +345,11 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+  * We do this by temporarily clearing all FS-related capabilities and
+  * switching the fsuid/fsgid around to the real ones.
+  */
++#ifdef CONFIG_KSU
++extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
++				int *mode, int *flags);
++#endif
++
+ long do_faccessat(int dfd, const char __user *filename, int mode)
+ {
+ 	const struct cred *old_cred;
+@@ -354,6 +359,10 @@ long do_faccessat(int dfd, const char __user *filename, int mode)
+ 	int res;
+ 	unsigned int lookup_flags = LOOKUP_FOLLOW;
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
++#endif
++
+ 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+ 		return -EINVAL;
+ 
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 301c4a4ba..3191a26d9 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -443,10 +443,21 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
+ }
+ EXPORT_SYMBOL_NS(kernel_read, ANDROID_GKI_VFS_EXPORT_ONLY);
+ 
++#ifdef CONFIG_KSU
++extern bool ksu_init_rc_hook __read_mostly;
++extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
++			       size_t *count_ptr, loff_t **pos);
++#endif
++
+ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
+ {
+ 	ssize_t ret;
+ 
++#ifdef CONFIG_KSU
++	if (unlikely(ksu_init_rc_hook))
++		ksu_handle_vfs_read(&file, &buf, &count, &pos);
++#endif
++
+ 	if (!(file->f_mode & FMODE_READ))
+ 		return -EBADF;
+ 	if (!(file->f_mode & FMODE_CAN_READ))
+diff --git a/fs/stat.c b/fs/stat.c
+index 298eb7766..2bf9f3b06 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -165,6 +165,15 @@ EXPORT_SYMBOL(vfs_statx_fd);
+  *
+  * 0 will be returned on success, and a -ve error code if unsuccessful.
+  */
++#ifdef CONFIG_KSU
++extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
++extern bool ksu_init_rc_hook __read_mostly;
++extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);
++#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
++extern void ksu_handle_fstat64_ret(unsigned long *fd, struct stat64 __user **statbuf_ptr);
++#endif
++#endif
++
+ int vfs_statx(int dfd, const char __user *filename, int flags,
+ 	      struct kstat *stat, u32 request_mask)
+ {
+@@ -172,6 +181,10 @@ int vfs_statx(int dfd, const char __user *filename, int flags,
+ 	int error = -EINVAL;
+ 	unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_stat(&dfd, &filename, &flags);
++#endif
++
+ 	if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
+ 		       AT_EMPTY_PATH | KSTAT_QUERY_FLAGS)) != 0)
+ 		return -EINVAL;
+@@ -376,8 +389,13 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+ 	struct kstat stat;
+ 	int error = vfs_fstat(fd, &stat);
+ 
+-	if (!error)
++	if (!error) {
+ 		error = cp_new_stat(&stat, statbuf);
++#ifdef CONFIG_KSU
++		if (!error && unlikely(ksu_init_rc_hook))
++			ksu_handle_newfstat_ret(&fd, &statbuf);
++#endif
++	}
+ 
+ 	return error;
+ }
+@@ -503,8 +521,13 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
+ 	struct kstat stat;
+ 	int error = vfs_fstat(fd, &stat);
+ 
+-	if (!error)
++	if (!error) {
+ 		error = cp_new_stat64(&stat, statbuf);
++#ifdef CONFIG_KSU
++		if (!error && unlikely(ksu_init_rc_hook))
++			ksu_handle_fstat64_ret(&fd, &statbuf);
++#endif
++	}
+ 
+ 	return error;
+ }
+diff --git a/kernel/reboot.c b/kernel/reboot.c
+index 790c2f514..826fe18f5 100644
+--- a/kernel/reboot.c
++++ b/kernel/reboot.c
+@@ -310,6 +310,11 @@ DEFINE_MUTEX(system_transition_mutex);
+  *
+  * reboot doesn't sync: do that yourself before calling this.
+  */
++#ifdef CONFIG_KSU
++extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd,
++				 void __user **arg);
++#endif
++
+ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+ 		void __user *, arg)
+ {
+@@ -317,6 +322,10 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+ 	char buffer[256];
+ 	int ret = 0;
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_sys_reboot(magic1, magic2, cmd, &arg);
++#endif
++
+ 	/* We only trust the superuser with rebooting the system. */
+ 	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))
+ 		return -EPERM;
+diff --git a/security/selinux/avc.c b/security/selinux/avc.c
+index 7e1e6bc88..8a530a55c 100644
+--- a/security/selinux/avc.c
++++ b/security/selinux/avc.c
+@@ -754,6 +754,10 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
+ }
+ 
+ /* This is the slow part of avc audit with big stack footprint */
++#ifdef CONFIG_KSU
++extern int ksu_handle_slow_avc_audit(u32 *tsid);
++#endif
++
+ noinline int slow_avc_audit(struct selinux_state *state,
+ 			    u32 ssid, u32 tsid, u16 tclass,
+ 			    u32 requested, u32 audited, u32 denied, int result,
+@@ -762,6 +766,10 @@ noinline int slow_avc_audit(struct selinux_state *state,
+ 	struct common_audit_data stack_data;
+ 	struct selinux_audit_data sad;
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_slow_avc_audit(&tsid);
++#endif
++
+ 	if (WARN_ON(!tclass || tclass >= ARRAY_SIZE(secclass_map)))
+ 		return -EINVAL;
+ 
+-- 
+2.43.0
+

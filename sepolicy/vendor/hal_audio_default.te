@@ -1,0 +1,2 @@
+# Dual Awinic AW882xx stereo Smart PA calibration access
+allow hal_audio_default vendor_sysfs_smartpa:file rw_file_perms;

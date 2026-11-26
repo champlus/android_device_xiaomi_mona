@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     SPDX-FileCopyrightText: The LineageOS Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- Status bar height matching mona top-center punch-hole (108px) -->
+    <dimen name="status_bar_height_default">28dp</dimen>
+    <dimen name="status_bar_height_portrait">108px</dimen>
+    <dimen name="status_bar_height_landscape">28dp</dimen>
+
+    <!-- Curved OLED software rounded corners (verified from mona/mojin) -->
+    <dimen name="rounded_corner_radius">98px</dimen>
+    <dimen name="rounded_corner_radius_bottom">98px</dimen>
+    <dimen name="rounded_corner_radius_adjustment">5px</dimen>
+    <dimen name="rounded_corner_content_padding">50px</dimen>
+</resources>

@@ -1,0 +1,3 @@
+# PM8350C front dual soft-light flash & rear flash LED access
+allow hal_camera_default sysfs_leds:dir r_dir_perms;
+allow hal_camera_default sysfs_leds:file rw_file_perms;

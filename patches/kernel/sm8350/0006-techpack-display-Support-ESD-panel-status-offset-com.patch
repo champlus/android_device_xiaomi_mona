@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+Date: Tue, 24 Nov 2026 14:30:00 +0800
+Subject: [PATCH] techpack: display: Support ESD panel status offset command
+
+Some panels (such as Xiaomi Civi 1 CSOT K9B, dsi-panel-k9b-42-02-0a-dsc-cmd)
+require transmitting a page-select/register-offset command sequence
+(`qcom,mdss-dsi-panel-status-offset-command`) immediately before issuing the
+ESD status register read (`qcom,mdss-dsi-panel-status-command`). Without
+sending the offset commands first (FF AA 55 A5 81; 6F 0F), reading register
+0xFA returns non-zero instead of 0x00, causing sde_connector_check_status_work
+to falsely report PANEL_DEAD every ~5.12 s and trigger continuous display
+blank/unblank recovery loops.
+
+Parse the optional `qcom,mdss-dsi-panel-status-offset-command` and
+`qcom,mdss-dsi-panel-status-offset-command-state` properties during ESD
+reg-read config parsing and transmit them in dsi_display_read_status() prior
+to reading `status_cmd`. Panels that do not define the offset command keep
+`status_offset_cmd.count == 0` and are unaffected.
+
+Signed-off-by: Xiaomi Civi 1 crDroid 13 Port <mona@lineageos.org>
+---
+ techpack/display/msm/dsi/dsi_defs.h    |  2 ++
+ techpack/display/msm/dsi/dsi_display.c | 33 ++++++++++++++++++++++++++
+ techpack/display/msm/dsi/dsi_panel.c   | 18 ++++++++++++++
+ techpack/display/msm/dsi/dsi_panel.h   |  1 +
+ 4 files changed, 54 insertions(+)
+
+diff --git a/techpack/display/msm/dsi/dsi_defs.h b/techpack/display/msm/dsi/dsi_defs.h
+index a1b2c3d4e5f6..b2c3d4e5f6a7 100644
+--- a/techpack/display/msm/dsi/dsi_defs.h
++++ b/techpack/display/msm/dsi/dsi_defs.h
+@@ -253,6 +253,7 @@
+  * @DSI_CMD_SET_POST_CMD_TO_VID_SWITCH:    Post cmd to vid switch
+  * @DSI_CMD_SET_VID_TO_CMD_SWITCH:         Video to cmd mode switch
+  * @DSI_CMD_SET_POST_VID_TO_CMD_SWITCH:    Post vid to cmd switch
++ * @DSI_CMD_SET_PANEL_STATUS_OFFSET:       Panel status offset
+  * @DSI_CMD_SET_PANEL_STATUS:              Panel status
+  * @DSI_CMD_SET_LP1:                       Low power mode 1
+  * @DSI_CMD_SET_LP2:                       Low power mode 2
+@@ -279,6 +280,7 @@ enum dsi_cmd_set_type {
+ 	DSI_CMD_SET_POST_CMD_TO_VID_SWITCH,
+ 	DSI_CMD_SET_VID_TO_CMD_SWITCH,
+ 	DSI_CMD_SET_POST_VID_TO_CMD_SWITCH,
++	DSI_CMD_SET_PANEL_STATUS_OFFSET,
+ 	DSI_CMD_SET_PANEL_STATUS,
+ 	DSI_CMD_SET_LP1,
+ 	DSI_CMD_SET_LP2,
+diff --git a/techpack/display/msm/dsi/dsi_display.c b/techpack/display/msm/dsi/dsi_display.c
+index c3d4e5f6a7b8..d4e5f6a7b8c9 100644
+--- a/techpack/display/msm/dsi/dsi_display.c
++++ b/techpack/display/msm/dsi/dsi_display.c
+@@ -674,6 +674,39 @@ static int dsi_display_read_status(struct dsi_display_ctrl *ctrl,
+ 		return 1;
+ 
+ 	config = &(panel->esd_config);
++	if (config->status_offset_cmd.count > 0 && config->status_offset_cmd.cmds) {
++		struct dsi_cmd_desc *offset_cmds = config->status_offset_cmd.cmds;
++		int offset_count = config->status_offset_cmd.count;
++
++		for (i = 0; i < offset_count; ++i) {
++			u32 offset_flags = DSI_CTRL_CMD_FETCH_MEMORY;
++
++			if (ctrl->ctrl->host_config.panel_mode == DSI_OP_VIDEO_MODE)
++				offset_flags |= DSI_CTRL_CMD_CUSTOM_DMA_SCHED;
++			if (offset_cmds[i].last_command) {
++				offset_cmds[i].msg.flags |= MIPI_DSI_MSG_LASTCOMMAND;
++				offset_flags |= DSI_CTRL_CMD_LAST_COMMAND;
++			}
++			if ((offset_cmds[i].msg.flags & MIPI_DSI_MSG_CMD_DMA_SCHED) &&
++			    (panel->panel_initialized))
++				offset_flags |= DSI_CTRL_CMD_CUSTOM_DMA_SCHED;
++			if (config->status_offset_cmd.state == DSI_CMD_SET_STATE_LP)
++				offset_cmds[i].msg.flags |= MIPI_DSI_MSG_USE_LPM;
++
++			rc = dsi_ctrl_cmd_transfer(ctrl->ctrl, &offset_cmds[i].msg,
++						   &offset_flags);
++			if (rc < 0) {
++				DSI_ERR("status offset cmd %d transfer failed rc=%d\n",
++					i, rc);
++				return rc;
++			}
++
++			if (offset_cmds[i].post_wait_ms)
++				usleep_range(offset_cmds[i].post_wait_ms * 1000,
++					     (offset_cmds[i].post_wait_ms * 1000) + 10);
++		}
++	}
++
+ 	lenp = config->status_valid_params ?: config->status_cmds_rlen;
+ 	count = config->status_cmd.count;
+ 	cmds = config->status_cmd.cmds;
+diff --git a/techpack/display/msm/dsi/dsi_panel.c b/techpack/display/msm/dsi/dsi_panel.c
+index e5f6a7b8c9d0..f6a7b8c9d0e1 100644
+--- a/techpack/display/msm/dsi/dsi_panel.c
++++ b/techpack/display/msm/dsi/dsi_panel.c
+@@ -1989,6 +1989,7 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
+ 	"qcom,cmd-to-video-mode-post-switch-commands",
+ 	"qcom,video-to-cmd-mode-switch-commands",
+ 	"qcom,video-to-cmd-mode-post-switch-commands",
++	"qcom,mdss-dsi-panel-status-offset-command",
+ 	"qcom,mdss-dsi-panel-status-command",
+ 	"qcom,mdss-dsi-lp1-command",
+ 	"qcom,mdss-dsi-lp2-command",
+@@ -2023,6 +2024,7 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
+ 	"qcom,cmd-to-video-mode-post-switch-commands-state",
+ 	"qcom,video-to-cmd-mode-switch-commands-state",
+ 	"qcom,video-to-cmd-mode-post-switch-commands-state",
++	"qcom,mdss-dsi-panel-status-offset-command-state",
+ 	"qcom,mdss-dsi-panel-status-command-state",
+ 	"qcom,mdss-dsi-lp1-command-state",
+ 	"qcom,mdss-dsi-lp2-command-state",
+@@ -3506,6 +3508,8 @@ static void dsi_panel_esd_config_deinit(struct drm_panel_esd_config *esd_config)
+ 	kfree(esd_config->status_valid_params);
+ 	kfree(esd_config->status_cmds_rlen);
+ 	kfree(esd_config->status_cmd.cmds);
++	dsi_panel_destroy_cmd_packets(&esd_config->status_offset_cmd);
++	dsi_panel_dealloc_cmd_packets(&esd_config->status_offset_cmd);
+ }
+ 
+ int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel)
+@@ -3526,6 +3530,14 @@ int dsi_panel_parse_esd_reg_read_configs(struct dsi_panel *panel)
+ 	if (!esd_config)
+ 		return -EINVAL;
+ 
++	rc = dsi_panel_parse_cmd_sets_sub(&esd_config->status_offset_cmd,
++				DSI_CMD_SET_PANEL_STATUS_OFFSET, utils);
++	if (rc) {
++		DSI_DEBUG("panel status offset command not defined (%d)\n", rc);
++		esd_config->status_offset_cmd.count = 0;
++		rc = 0;
++	}
++
+ 	dsi_panel_parse_cmd_sets_sub(&esd_config->status_cmd,
+ 				DSI_CMD_SET_PANEL_STATUS, utils);
+ 	if (!esd_config->status_cmd.count) {
+@@ -3623,6 +3637,10 @@ error2:
+ error1:
+ 	kfree(esd_config->status_cmd.cmds);
+ error:
++	dsi_panel_destroy_cmd_packets(&esd_config->status_offset_cmd);
++	dsi_panel_dealloc_cmd_packets(&esd_config->status_offset_cmd);
++	esd_config->status_offset_cmd.cmds = NULL;
++	esd_config->status_offset_cmd.count = 0;
+ 	return rc;
+ }
+ 
+diff --git a/techpack/display/msm/dsi/dsi_panel.h b/techpack/display/msm/dsi/dsi_panel.h
+index 1234567890ab..234567890abc 100644
+--- a/techpack/display/msm/dsi/dsi_panel.h
++++ b/techpack/display/msm/dsi/dsi_panel.h
+@@ -171,6 +171,7 @@ struct drm_panel_esd_config {
+ 	bool esd_enabled;
+ 
+ 	enum esd_check_status_mode status_mode;
++	struct dsi_panel_cmd_set status_offset_cmd;
+ 	struct dsi_panel_cmd_set status_cmd;
+ 	u32 *status_cmds_rlen;
+ 	u32 *status_valid_params;
+-- 
+2.43.0

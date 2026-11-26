@@ -1,0 +1,29 @@
+From 3e7a9c1b5d2f4086a1c3e5f7b9d1a2c4e6f80123 Mon Sep 17 00:00:00 2001
+From: Xiaomi Civi Port <mona-port@lineageos.local>
+Date: Tue, 24 Nov 2026 01:54:00 +0800
+Subject: [PATCH 5/5] input: touchscreen: synaptics_s3908p: Fix
+ -Wstrict-prototypes on Clang 22
+
+Android 17 builds the kernel with Clang 22 (-Werror,-Wstrict-prototypes),
+which rejects function definitions with empty parameter lists ().
+
+Add void to syna_tcm_get_charging_status(void) in synaptics_tcm_core.c.
+---
+ drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
+index 63df5a8..8a4e219 100644
+--- a/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
++++ b/drivers/input/touchscreen/synaptics_s3908p/synaptics_tcm_core.c
+@@ -5495,7 +5495,7 @@ static const struct file_operations tpdbg_operations = {
+ #endif
+ 
+ #ifdef SYNAPTICS_POWERSUPPLY_CB
+-static int syna_tcm_get_charging_status()
++static int syna_tcm_get_charging_status(void)
+ {
+ #ifdef CONFIG_QGKI_SYSTEM
+ 	int is_charging = 0;
+-- 
+2.43.0
